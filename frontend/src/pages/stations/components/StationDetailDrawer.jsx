@@ -86,6 +86,13 @@ export default function StationDetailDrawer({ stationId, onClose, onEdit }) {
                 {stats.pending_count ?? 0}
               </div>
             </div>
+            <div className="stat-card">
+              <div className="stat-label">待巡检 / 维修中</div>
+              <div className="stat-value">
+                {stats.pending_inspection_count ?? 0}
+                <small> / {stats.active_work_order_count ?? 0}</small>
+              </div>
+            </div>
           </div>
           <div className="card">
             <div className="card-header">

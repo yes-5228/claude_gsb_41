@@ -14,7 +14,13 @@ from ..domain.constants import (
 )
 from ..domain.standards import POLLUTANTS
 from ..extensions import db
-from ..services import exceedance_service, query_service, station_service
+from ..services import (
+    exceedance_service,
+    inspection_service,
+    query_service,
+    station_service,
+    work_order_service,
+)
 
 bp = Blueprint("meta", __name__)
 
@@ -70,11 +76,27 @@ def overview():
         .limit(5)
         .all()
     )
+
+    inspection_service.mark_overdue(today)
+    inspection_summary = inspection_service.task_summary({})
+    work_order_summary = work_order_service.summary({})
+    todo_tasks = (
+        inspection_service.task_query({"status": "pending,overdue,in_progress"})
+        .order_by(None)
+        .limit(5)
+        .all()
+    )
+    active_orders = work_order_service.work_order_query({"status": "open,processing"}).limit(5).all()
+
     return {
         "stations": station_service.metadata_summary(),
         "measurements": query_service.summary(filters),
         "exceedances": exceedance_service.summary({}),
         "pending_exceedances": [record.to_dict() for record in pending_records],
+        "inspections": inspection_summary,
+        "work_orders": work_order_summary,
+        "todo_tasks": [task.to_dict() for task in todo_tasks],
+        "active_work_orders": [order.to_dict() for order in active_orders],
         "trend": trend,
         "labels": {
             "station_status": STATION_STATUS_LABELS,

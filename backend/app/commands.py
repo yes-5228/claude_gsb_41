@@ -2,7 +2,14 @@
 import click
 
 from .extensions import db
-from .models import Exceedance, Measurement, Station
+from .models import (
+    Exceedance,
+    InspectionPlan,
+    InspectionTask,
+    Measurement,
+    Station,
+    WorkOrder,
+)
 
 
 def register_commands(app):
@@ -45,10 +52,25 @@ def register_commands(app):
     def stats():
         """Print a short record summary."""
         click.echo(
-            "监测点 %d 个 / 监测数据 %d 条 / 超标记录 %d 条"
+            "监测点 %d 个 / 监测数据 %d 条 / 超标记录 %d 条 / 巡检计划 %d 个 / "
+            "巡检任务 %d 条 / 维修工单 %d 张"
             % (
                 Station.query.count(),
                 Measurement.query.count(),
                 Exceedance.query.count(),
+                InspectionPlan.query.count(),
+                InspectionTask.query.count(),
+                WorkOrder.query.count(),
             )
+        )
+
+    @app.cli.command("dispatch-inspections")
+    def dispatch_inspections():
+        """Dispatch due recurring inspection plans (meant to run daily via cron)."""
+        from .services import inspection_service
+
+        result = inspection_service.dispatch_due_plans()
+        click.echo(
+            "巡检派发完成: 到期计划 %d 个, 生成巡检任务 %d 条"
+            % (result["dispatched_plan_count"], result["task_count"])
         )

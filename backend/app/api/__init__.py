@@ -1,9 +1,11 @@
 """Blueprint registration."""
 from .exceedances import bp as exceedances_bp
+from .inspections import bp as inspections_bp
 from .measurements import bp as measurements_bp
 from .meta import bp as meta_bp
 from .query import bp as query_bp
 from .stations import bp as stations_bp
+from .work_orders import bp as work_orders_bp
 
 BLUEPRINTS = (
     (meta_bp, "/api/meta"),
@@ -11,6 +13,8 @@ BLUEPRINTS = (
     (measurements_bp, "/api/measurements"),
     (exceedances_bp, "/api/exceedances"),
     (query_bp, "/api/query"),
+    (inspections_bp, "/api/inspections"),
+    (work_orders_bp, "/api/work-orders"),
 )
 
 

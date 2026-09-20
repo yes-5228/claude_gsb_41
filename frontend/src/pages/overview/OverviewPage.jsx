@@ -7,9 +7,13 @@ import DataTable from '../../components/common/DataTable.jsx'
 import { Alert, ErrorState, Loading } from '../../components/common/Feedback.jsx'
 import StatCard from '../../components/common/StatCard.jsx'
 import Tag from '../../components/common/Tag.jsx'
-import { EXCEEDANCE_LEVEL_TONE } from '../../constants/index.js'
+import {
+  EXCEEDANCE_LEVEL_TONE,
+  INSPECTION_TASK_STATUS_TONE,
+  WORK_ORDER_STATUS_TONE
+} from '../../constants/index.js'
 import { useAsyncData } from '../../hooks/useAsyncData.js'
-import { formatDateTime, formatNumber, formatPercent, formatRatio } from '../../utils/format.js'
+import { formatDate, formatDateTime, formatNumber, formatPercent, formatRatio } from '../../utils/format.js'
 
 export default function OverviewPage() {
   const loader = useCallback(() => overview(), [])
@@ -19,7 +23,17 @@ export default function OverviewPage() {
   if (error && !data) return <ErrorState error={error} onRetry={reload} />
   if (!data) return null
 
-  const { stations, measurements, exceedances, trend, pending_exceedances: pending } = data
+  const {
+    stations,
+    measurements,
+    exceedances,
+    trend,
+    pending_exceedances: pending,
+    inspections,
+    work_orders: workOrders,
+    todo_tasks: todoTasks,
+    active_work_orders: activeOrders
+  } = data
 
   const pendingColumns = [
     { key: 'measured_at', title: '监测时间', className: 'cell-nowrap', render: (row) => formatDateTime(row.measured_at) },
@@ -35,6 +49,30 @@ export default function OverviewPage() {
       key: 'level',
       title: '等级',
       render: (row) => <Tag tone={EXCEEDANCE_LEVEL_TONE[row.level]}>{row.level_label}</Tag>
+    }
+  ]
+
+  const todoTaskColumns = [
+    { key: 'code', title: '任务单号', className: 'cell-nowrap mono' },
+    { key: 'station_name', title: '监测点' },
+    { key: 'due_date', title: '应检日期', className: 'cell-nowrap', render: (row) => formatDate(row.due_date) },
+    { key: 'inspector', title: '巡检人', render: (row) => row.inspector || '-' },
+    {
+      key: 'status',
+      title: '状态',
+      render: (row) => <Tag tone={INSPECTION_TASK_STATUS_TONE[row.status]}>{row.status_label}</Tag>
+    }
+  ]
+
+  const activeOrderColumns = [
+    { key: 'code', title: '工单号', className: 'cell-nowrap mono' },
+    { key: 'title', title: '故障内容' },
+    { key: 'station_name', title: '监测点' },
+    { key: 'assignee', title: '负责人', render: (row) => row.assignee || '待派单' },
+    {
+      key: 'status',
+      title: '状态',
+      render: (row) => <Tag tone={WORK_ORDER_STATUS_TONE[row.status]}>{row.status_label}</Tag>
     }
   ]
 
@@ -61,17 +99,17 @@ export default function OverviewPage() {
           foot={`覆盖 ${measurements.station_count} 个监测点 · 均值 ${formatNumber(measurements.avg_value)}`}
         />
         <StatCard
-          label="超标记录"
-          value={exceedances.total}
-          tone={exceedances.total ? 'danger' : undefined}
-          foot={`超标率 ${formatPercent(measurements.exceed_rate)} · 最大 ${formatRatio(exceedances.max_ratio)}`}
+          label="巡检待办"
+          value={inspections.todo}
+          tone={inspections.todo ? 'warning' : undefined}
+          foot={`今日到期 ${inspections.due_today} · 逾期/待执行/执行中见工作台`}
         />
         <StatCard
-          label="待标注超标"
-          value={exceedances.pending}
-          tone={exceedances.pending ? 'warning' : undefined}
+          label="维修中工单"
+          value={workOrders.active}
+          tone={workOrders.active ? 'danger' : undefined}
           foot={
-            <Link to="/exceedances">前往标注工作台 →</Link>
+            <Link to="/inspections">前往运维巡检处理 →</Link>
           }
         />
       </div>
@@ -108,11 +146,37 @@ export default function OverviewPage() {
         </SectionCard>
       </div>
 
+      <div className="grid-2">
+        <SectionCard
+          title="巡检待办 (最近 5 条)"
+          hint="待执行 / 执行中 / 已逾期的巡检任务, 逐项登记结果"
+          actions={<Link className="btn btn-sm btn-primary" to="/inspections">去巡检</Link>}
+        >
+          {todoTasks.length === 0 ? (
+            <Alert tone="success">当前没有待办巡检任务 ✅</Alert>
+          ) : (
+            <DataTable columns={todoTaskColumns} rows={todoTasks} emptyText="暂无待办" emptyIcon="✅" />
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="维修中工单 (最近 5 张)"
+          hint="处理完成后自动回写台账运行状态"
+          actions={<Link className="btn btn-sm btn-primary" to="/inspections">处理工单</Link>}
+        >
+          {activeOrders.length === 0 ? (
+            <Alert tone="success">没有进行中的维修工单, 设备运行正常 ✅</Alert>
+          ) : (
+            <DataTable columns={activeOrderColumns} rows={activeOrders} emptyText="暂无维修工单" emptyIcon="🛠️" />
+          )}
+        </SectionCard>
+      </div>
+
       <SectionCard
-        title="待标注超标记录 (最近 5 条)"
-        hint="按监测时间倒序, 点击“超标记录标注”模块可批量处理"
+        title="数据质量概览"
+        hint={`超标记录 ${exceedances.total} 条 (超标率 ${formatPercent(measurements.exceed_rate)} · 最大超标 ${formatRatio(exceedances.max_ratio)}), 待标注 ${exceedances.pending} 条`}
         actions={
-          <Link className="btn btn-sm btn-primary" to="/exceedances">
+          <Link className="btn btn-sm" to="/exceedances">
             处理超标标注
           </Link>
         }

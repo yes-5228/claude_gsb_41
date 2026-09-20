@@ -13,10 +13,12 @@
 | 监测数据录入 | `/measurements` | 按“监测点 + 时刻 + 周期”成组录入多因子浓度、超标校验预览、重复数据覆盖、录入结果回执 |
 | 超标记录标注 | `/exceedances` | 超标自动建单、单条/批量标注(确认 / 忽略 / 重置)、等级人工修正、标注留痕与统计 |
 | 数据查询 | `/query` | 多条件组合检索、聚合统计(按因子/站点/区域/日/月等)、分页浏览、CSV 导出 |
+| 运维巡检 | `/inspections` | 巡检计划(日/周/月周期)、自动/手动派单、逐项登记巡检结果、异常一键转维修工单、工单办结自动回写台账运行状态 |
 
 设计要点:
 
 - **超标自动判定**: 数据写入时即按“因子 + 数据周期”取用限值, 计算超标倍数并分级, 同步生成待标注超标记录; 修正数据后超标记录自动更新或撤销。
+- **巡检闭环与状态一致性**: 周期计划自动派单(停用点位自动跳过、同点同日不重复), 任务逐项记录“正常/异常/不适用”; 异常项直接转维修工单, 工单进入处理即把台账置为“维护中”, 办结后自动恢复“运行中”——台账、巡检记录与待办列表共用同一套状态口径。
 - **业务规则集中在后端**: 限值与分级规则位于 `backend/app/domain/`, 前端仅做展示与前置校验, 避免规则分叉。
 - **模块化组织**: 后端按 `api / services / models / domain / utils` 分层; 前端每个业务模块独占目录, 公共能力沉淀在 `components/`、`hooks/`、`api/`。
 
@@ -28,7 +30,7 @@
 | 数据库 | SQLite(默认, 零依赖) / PostgreSQL 16(可选, compose 覆盖文件) |
 | 前端 | React 18 · React Router 6 · Vite 7 · Axios · 原生 CSS(设计令牌 + 组件类) |
 | 部署 | Docker 多阶段构建 · Nginx 静态托管与 `/api` 反向代理 · docker compose |
-| 测试 | Pytest(43 个后端用例: 接口 + 领域规则) |
+| 测试 | Pytest(63 个后端用例: 接口 + 领域规则) |
 
 ## 目录结构
 
@@ -40,12 +42,12 @@
 │   │   ├── config.py            # 多环境配置 (development/production/testing)
 │   │   ├── extensions.py        # db / cors 单例, SQLite 外键开关
 │   │   ├── errors.py            # 统一异常与 JSON 错误响应
-│   │   ├── commands.py          # flask init-db / seed / reset-db / stats
+│   │   ├── commands.py          # flask init-db / seed / reset-db / stats / dispatch-inspections
 │   │   ├── seed.py              # 演示数据生成与启动引导
-│   │   ├── domain/              # 业务规则: 因子限值、枚举、超标分级
-│   │   ├── models/              # Station / Measurement / Exceedance
-│   │   ├── services/            # 台账、录入、标注、查询统计业务逻辑
-│   │   ├── api/                 # 蓝图: meta / stations / measurements / exceedances / query
+│   │   ├── domain/              # 业务规则: 因子限值、枚举、超标分级、巡检项目录
+│   │   ├── models/              # Station / Measurement / Exceedance / InspectionPlan / InspectionTask(+Item) / WorkOrder
+│   │   ├── services/            # 台账、录入、标注、查询统计、巡检派发与执行、维修工单流转
+│   │   ├── api/                 # 蓝图: meta / stations / measurements / exceedances / query / inspections / work-orders
 │   │   └── utils/               # 校验器、分页、CSV 导出
 │   ├── tests/                   # Pytest 用例
 │   ├── Dockerfile · docker-entrypoint.sh · requirements*.txt
@@ -56,7 +58,7 @@
 │   │   ├── components/          # layout(侧边栏/顶栏) 与 common(表格/分页/弹窗/表单等)
 │   │   ├── constants/           # 路由、标签与色板映射
 │   │   ├── hooks/               # useListQuery / useAsyncData / useOptions
-│   │   ├── pages/               # overview / stations / measurements / exceedances / query
+│   │   ├── pages/               # overview / stations / measurements / exceedances / inspections / query
 │   │   ├── styles/global.css    # 设计令牌与公共样式
 │   │   └── utils/               # 时间/数值格式化、下载
 │   ├── Dockerfile · nginx.conf · vite.config.js
@@ -168,6 +170,25 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 | GET | `/api/query/measurements` | 高级条件检索 |
 | GET | `/api/query/statistics` | 聚合统计(`group_by` + `metric`) |
 | GET | `/api/query/export` | 查询结果导出 CSV |
+| GET/POST | `/api/inspections/plans` | 巡检计划分页查询 / 新建(绑定点位、巡检项、周期) |
+| PUT/DELETE | `/api/inspections/plans/{id}` | 更新计划(启停) / 删除(历史任务保留) |
+| POST | `/api/inspections/plans/{id}/dispatch` | 立即派发一次计划 |
+| POST | `/api/inspections/dispatch-due` | 执行到期计划自动派发 + 逾期标记(可配 cron) |
+| GET/POST | `/api/inspections/tasks` | 巡检任务查询(含状态统计) / 手动建临时任务 |
+| POST | `/api/inspections/tasks/{id}/start` | 开始巡检 |
+| PUT | `/api/inspections/tasks/{id}/items/{itemId}` | 逐项登记结果(正常/异常/不适用, 异常必填说明) |
+| POST | `/api/inspections/tasks/{id}/submit` | 提交任务(所有项登记完才可办结) |
+| POST | `/api/inspections/tasks/{id}/items/{itemId}/convert` | **异常项一键转维修工单** |
+| GET/POST | `/api/work-orders` | 维修工单查询 / 人工建单 |
+| PATCH | `/api/work-orders/{id}` | 派单/开始/完成(必填处理说明)/关闭/取消, 自动回写台账 |
+
+### 巡检派发与状态一致性
+
+- **周期派发**: 计划支持 `daily / weekly / monthly / once`, 每天调用一次 `flask dispatch-inspections`
+  (或请求 `POST /api/inspections/dispatch-due`) 即可; 单次计划派发后自动停用, 重复调用不会对同点同日重复建单, `offline` 点位自动跳过。
+- **任务执行**: 首个巡检项登记时任务自动从“待执行”变为“执行中”; 超过应检日期未开始/未完成自动标记“已逾期”; 全部为正常办结为“已完成”, 存在异常办结为“巡检异常”。
+- **异常转单**: 只有结果为“异常”的巡检项可转单, 同一异常项存在进行中工单时禁止重复转单。
+- **台账回写(单一收口)**: 工单处于 `open/processing` 时点位自动变为“维护中”; 工单办结(修复/取消)后自动恢复“运行中”, 人工置为“停用(offline)”的点位不会被工单流程覆盖。运行概览、台账列表与巡检待办共用同一状态口径。
 
 `POST /api/measurements/entries` 请求示例:
 
@@ -207,8 +228,12 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --buil
 | `stations` | `code`(唯一) `name` `area` `station_type` `status` `longitude/latitude` `installed_at` | 监测点台账 |
 | `measurements` | `station_id` `pollutant` `period` `value` `limit_value` `exceed_ratio` `is_exceeded` `measured_at` `data_source` `recorder` | 监测数据; `(station_id, pollutant, period, measured_at)` 唯一 |
 | `exceedances` | `measurement_id`(唯一) `status` `level` `note` `annotator` `annotated_at` | 超标记录与人工标注 |
+| `inspection_plans` | `name` `cycle` `items`(JSON) `start_date` `next_run_date` `end_date` `enabled` `inspector` | 巡检计划; 通过 `inspection_plan_stations` 关联表绑定多个点位 |
+| `inspection_tasks` | `code`(唯一) `plan_id` `station_id` `status` `due_date` `items_snapshot`(JSON) `abnormal_count` `started_at/finished_at` | 派发生成的巡检任务; `(plan_id, station_id, due_date)` 唯一防重 |
+| `inspection_task_items` | `task_id` `item_code` `item_name` `category` `result` `remark` `checked_at` | 逐项巡检结果(派单时固化巡检项快照) |
+| `work_orders` | `code`(唯一) `station_id` `task_item_id`(唯一) `source` `status` `priority` `assignee` `resolution` `reported_at/resolved_at/closed_at` | 维修工单; 驱动台账运行状态回写 |
 
-删除监测点会级联清理其监测数据与超标记录; 删除监测数据会同时删除对应超标记录。
+删除监测点会级联清理其监测数据、超标记录、巡检任务与维修工单; 删除巡检计划时历史巡检任务保留(解除关联)。
 
 ## 配置项
 

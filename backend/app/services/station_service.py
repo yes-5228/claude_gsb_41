@@ -1,10 +1,16 @@
 """监测点台账业务逻辑."""
 from sqlalchemy import cast, func, or_
 
-from ..domain.constants import STATION_STATUS_LABELS, STATION_TYPE_LABELS
+from ..domain.constants import STATION_STATUS_LABELS, STATION_TYPE_LABELS, WORK_ORDER_ACTIVE_STATUSES
 from ..errors import ConflictError, NotFoundError
 from ..extensions import db
-from ..models import Exceedance, Measurement, Station
+from ..models import (
+    Exceedance,
+    InspectionTask,
+    Measurement,
+    Station,
+    WorkOrder,
+)
 
 
 def _split(value):
@@ -71,12 +77,19 @@ def update_station(station, data):
 
 
 def delete_station(station):
-    """Remove a station together with its measurements and exceedance records."""
+    """Remove a station together with its measurements and related records."""
     measurement_count = Measurement.query.filter_by(station_id=station.id).count()
     exceedance_count = Exceedance.query.filter_by(station_id=station.id).count()
+    inspection_count = InspectionTask.query.filter_by(station_id=station.id).count()
+    work_order_count = WorkOrder.query.filter_by(station_id=station.id).count()
     db.session.delete(station)
     db.session.commit()
-    return {"measurements_removed": measurement_count, "exceedances_removed": exceedance_count}
+    return {
+        "measurements_removed": measurement_count,
+        "exceedances_removed": exceedance_count,
+        "inspections_removed": inspection_count,
+        "work_orders_removed": work_order_count,
+    }
 
 
 def stats_map(station_ids):
@@ -107,6 +120,24 @@ def stats_map(station_ids):
         .group_by(Measurement.station_id)
         .all()
     )
+    pending_inspections = dict(
+        db.session.query(InspectionTask.station_id, func.count(InspectionTask.id))
+        .filter(
+            InspectionTask.station_id.in_(station_ids),
+            InspectionTask.status.in_(("pending", "in_progress", "overdue")),
+        )
+        .group_by(InspectionTask.station_id)
+        .all()
+    )
+    active_work_orders = dict(
+        db.session.query(WorkOrder.station_id, func.count(WorkOrder.id))
+        .filter(
+            WorkOrder.station_id.in_(station_ids),
+            WorkOrder.status.in_(WORK_ORDER_ACTIVE_STATUSES),
+        )
+        .group_by(WorkOrder.station_id)
+        .all()
+    )
     from ..models.base import iso
 
     return {
@@ -115,6 +146,8 @@ def stats_map(station_ids):
             "exceeded_count": int(exceeded.get(station_id, 0)),
             "pending_count": int(pending.get(station_id, 0)),
             "last_measured_at": iso(last_seen.get(station_id)),
+            "pending_inspection_count": int(pending_inspections.get(station_id, 0)),
+            "active_work_order_count": int(active_work_orders.get(station_id, 0)),
         }
         for station_id in station_ids
     }

@@ -58,6 +58,22 @@ export default function StationTable({ rows, loading, onDetail, onEdit, onDelete
         )
     },
     {
+      key: 'ops',
+      title: '巡检 / 维修',
+      align: 'right',
+      render: (row) => {
+        const inspections = row.stats?.pending_inspection_count ?? 0
+        const orders = row.stats?.active_work_order_count ?? 0
+        if (!inspections && !orders) return <span className="muted">-</span>
+        return (
+          <span className="inline" style={{ gap: 4, justifyContent: 'flex-end' }}>
+            {inspections ? <Tag tone="primary">待巡检 {inspections}</Tag> : null}
+            {orders ? <Tag tone="warning">维修中 {orders}</Tag> : null}
+          </span>
+        )
+      }
+    },
+    {
       key: 'actions',
       title: '操作',
       align: 'right',
