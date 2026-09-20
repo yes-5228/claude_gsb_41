@@ -31,6 +31,24 @@ class Station(TimestampMixin, db.Model):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    inspection_plans = db.relationship(
+        "InspectionPlan",
+        back_populates="station",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    inspection_tasks = db.relationship(
+        "InspectionTask",
+        back_populates="station",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    repair_orders = db.relationship(
+        "RepairOrder",
+        back_populates="station",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def to_dict(self, include_stats=False, stats=None):
         payload = {

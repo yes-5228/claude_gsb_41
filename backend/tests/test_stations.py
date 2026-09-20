@@ -78,7 +78,12 @@ def test_delete_station_removes_measurements_and_exceedances(client, app, statio
 
     response = client.delete("/api/stations/%d" % station.id)
     assert response.status_code == 200
-    assert response.get_json()["removed"] == {"measurements_removed": 3, "exceedances_removed": 1}
+    assert response.get_json()["removed"] == {
+        "measurements_removed": 3,
+        "exceedances_removed": 1,
+        "inspection_tasks_removed": 0,
+        "repair_orders_removed": 0,
+    }
     assert Station.query.count() == 0
     assert Measurement.query.count() == 0
 

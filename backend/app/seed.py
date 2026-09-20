@@ -1,9 +1,10 @@
 """演示数据生成与启动引导."""
+import json
 import random
 from datetime import date, datetime, timedelta
 
 from .extensions import db
-from .models import Exceedance, Measurement, Station
+from .models import Exceedance, InspectionPlan, Measurement, RepairOrder, Station
 
 DEMO_STATIONS = [
     {
@@ -147,6 +148,137 @@ def seed_demo_data(days=5, rng=None, recorder_pool=RECORDERS):
     return totals
 
 
+# ---- 运维巡检演示数据 -------------------------------------------------------
+INSPECTION_PLAN_DEMO = [
+    # (station_code, name, cycle, items, assignee)
+    ("SZ-AQ-001", "市民中心站例行巡检", "weekly",
+     ["采样管路清洁与密封性", "分析仪运行状态与报警", "数据采集与传输链路", "供电系统与UPS续航"], "李静"),
+    ("SZ-AQ-003", "罗湖口岸站周巡检", "weekly",
+     ["采样管路清洁与密封性", "分析仪运行状态与报警", "站房温湿度与空调", "站房安全与环境卫生"], "王敏"),
+    ("SZ-AQ-005", "龙岗工业园站月度巡检", "monthly",
+     ["采样管路清洁与密封性", "分析仪运行状态与报警", "数据采集与传输链路",
+      "标准气体与校准记录", "防雷与接地装置"], "陈志强"),
+    ("SZ-AQ-006", "梧桐山背景站季度巡检", "quarterly",
+     ["供电系统与UPS续航", "防雷与接地装置", "站房安全与环境卫生"], "赵宇"),
+]
+
+
+def seed_inspection_data(recorder_pool=RECORDERS):
+    """生成巡检计划/任务/工单演示数据, 覆盖闭环的各个状态."""
+    from .services import inspection_service, repair_service
+
+    rng = random.Random(20260920)
+    stations = {station.code: station for station in Station.query.all()}
+    totals = {"plans": 0, "tasks": 0, "repairs": 0}
+
+    plans = []
+    for code, name, cycle, items, assignee in INSPECTION_PLAN_DEMO:
+        station = stations.get(code)
+        if station is None:
+            continue
+        plan = inspection_service.create_plan(
+            {
+                "station_id": station.id,
+                "name": name,
+                "cycle": cycle,
+                "items": json.dumps(items, ensure_ascii=False),
+                "assignee": assignee,
+                "active": True,
+            }
+        )
+        plans.append(plan)
+    totals["plans"] = len(plans)
+
+    # 1) 已完成且正常的任务: 直接构造历史记录
+    normal_plan = next((plan for plan in plans if plan.cycle == "quarterly"), plans[0])
+    task, created = inspection_service.dispatch_plan(normal_plan)
+    if created:
+        inspection_service.complete_task(
+            task,
+            items=[{"id": item.id, "result": "normal", "note": ""} for item in task.items],
+            executor=normal_plan.assignee,
+            summary="各项检查正常, 设备运行稳定",
+        )
+        totals["tasks"] += 1
+
+    # 2) 已完成且异常 -> 已生成工单并修复: 台账状态回写为运行中
+    if len(plans) >= 3:
+        resolved_plan = plans[2]
+        task, created = inspection_service.dispatch_plan(resolved_plan)
+        if created:
+            item_payloads = []
+            for index, item in enumerate(task.items):
+                if index == 1:
+                    item_payloads.append(
+                        {"id": item.id, "result": "abnormal", "note": "分析仪响应迟缓, 零点漂移超限"}
+                    )
+                else:
+                    item_payloads.append({"id": item.id, "result": "normal", "note": ""})
+            task, repair = inspection_service.complete_task(
+                task,
+                items=item_payloads,
+                executor=resolved_plan.assignee,
+                summary="分析仪存在零点漂移, 已转维修工单处理",
+                repair_data={"priority": "high", "title": "分析仪零点漂移维修"},
+            )
+            totals["tasks"] += 1
+            if repair:
+                repair_service.resolve_repair(
+                    repair,
+                    resolution="已更换分析仪光源模块并重新校准, 零点漂移恢复正常",
+                    handler="孙倩",
+                    station_status_after="active",
+                )
+                totals["repairs"] += 1
+
+    # 3) 已完成且异常 -> 工单待处理: 台账保持维护中, 出现在待办列表
+    if len(plans) >= 2:
+        abnormal_plan = plans[1]
+        task, created = inspection_service.dispatch_plan(abnormal_plan)
+        if created:
+            item_payloads = []
+            for index, item in enumerate(task.items):
+                if index == 2:
+                    item_payloads.append(
+                        {"id": item.id, "result": "abnormal", "note": "站房空调制冷不足, 温度持续偏高"}
+                    )
+                else:
+                    item_payloads.append({"id": item.id, "result": "normal", "note": ""})
+            task, repair = inspection_service.complete_task(
+                task,
+                items=item_payloads,
+                executor=abnormal_plan.assignee,
+                summary="站房温湿度超标, 需维修空调",
+                repair_data={"priority": "urgent", "title": "站房空调维修"},
+            )
+            totals["tasks"] += 1
+            if repair:
+                totals["repairs"] += 1
+
+    # 4) 待执行任务: 保留在待办列表
+    if plans:
+        task, created = inspection_service.dispatch_plan(plans[0])
+        if created:
+            totals["tasks"] += 1
+
+    # 5) 手工报修工单 (处理中), 来源非巡检
+    manual_station = stations.get("SZ-AQ-004")
+    if manual_station:
+        repair = repair_service.create_repair(
+            manual_station,
+            {
+                "title": "数据采集器间歇性掉线",
+                "description": "运维值班发现数据平台夜间多次断连, 怀疑采集器SIM卡接触不良",
+                "priority": "medium",
+                "reporter": rng.choice(recorder_pool),
+                "handler": "赵宇",
+            },
+        )
+        totals["repairs"] += 1
+
+    return totals
+
+
 def reset_database():
     db.drop_all()
     db.create_all()
@@ -165,5 +297,6 @@ def ensure_bootstrap(app):
             if auto_seed and db.session.query(Station.id).first() is None:
                 app.logger.info("seeding demo data ...")
                 seed_demo_data()
+                seed_inspection_data()
         except Exception as exc:  # pragma: no cover - depends on external database
             app.logger.warning("bootstrap skipped: %s", exc)

@@ -4,7 +4,7 @@ from sqlalchemy import cast, func, or_
 from ..domain.constants import STATION_STATUS_LABELS, STATION_TYPE_LABELS
 from ..errors import ConflictError, NotFoundError
 from ..extensions import db
-from ..models import Exceedance, Measurement, Station
+from ..models import Exceedance, InspectionTask, Measurement, RepairOrder, Station
 
 
 def _split(value):
@@ -74,9 +74,16 @@ def delete_station(station):
     """Remove a station together with its measurements and exceedance records."""
     measurement_count = Measurement.query.filter_by(station_id=station.id).count()
     exceedance_count = Exceedance.query.filter_by(station_id=station.id).count()
+    task_count = InspectionTask.query.filter_by(station_id=station.id).count()
+    repair_count = RepairOrder.query.filter_by(station_id=station.id).count()
     db.session.delete(station)
     db.session.commit()
-    return {"measurements_removed": measurement_count, "exceedances_removed": exceedance_count}
+    return {
+        "measurements_removed": measurement_count,
+        "exceedances_removed": exceedance_count,
+        "inspection_tasks_removed": task_count,
+        "repair_orders_removed": repair_count,
+    }
 
 
 def stats_map(station_ids):
@@ -107,6 +114,24 @@ def stats_map(station_ids):
         .group_by(Measurement.station_id)
         .all()
     )
+    open_tasks = dict(
+        db.session.query(InspectionTask.station_id, func.count(InspectionTask.id))
+        .filter(
+            InspectionTask.station_id.in_(station_ids),
+            InspectionTask.status.in_(("pending", "in_progress")),
+        )
+        .group_by(InspectionTask.station_id)
+        .all()
+    )
+    open_repairs = dict(
+        db.session.query(RepairOrder.station_id, func.count(RepairOrder.id))
+        .filter(
+            RepairOrder.station_id.in_(station_ids),
+            RepairOrder.status.in_(("open", "processing")),
+        )
+        .group_by(RepairOrder.station_id)
+        .all()
+    )
     from ..models.base import iso
 
     return {
@@ -114,6 +139,8 @@ def stats_map(station_ids):
             "measurement_count": int(measurements.get(station_id, 0)),
             "exceeded_count": int(exceeded.get(station_id, 0)),
             "pending_count": int(pending.get(station_id, 0)),
+            "open_task_count": int(open_tasks.get(station_id, 0)),
+            "open_repair_count": int(open_repairs.get(station_id, 0)),
             "last_measured_at": iso(last_seen.get(station_id)),
         }
         for station_id in station_ids

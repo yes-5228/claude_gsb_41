@@ -86,6 +86,18 @@ export default function StationDetailDrawer({ stationId, onClose, onEdit }) {
                 {stats.pending_count ?? 0}
               </div>
             </div>
+            <div className="stat-card">
+              <div className="stat-label">待办巡检任务</div>
+              <div className="stat-value" style={{ color: 'var(--warning)' }}>
+                {stats.open_task_count ?? 0}
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">待处理工单</div>
+              <div className="stat-value" style={{ color: 'var(--warning)' }}>
+                {stats.open_repair_count ?? 0}
+              </div>
+            </div>
           </div>
           <div className="card">
             <div className="card-header">
